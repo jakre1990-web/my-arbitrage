@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Arbitrage Prices</title>
+<style>
+  body { font-family: Arial, sans-serif; padding: 20px; }
+  h1 { color: #333; }
+  input, button { padding: 5px; font-size: 16px; margin-right: 5px; }
+  .price { margin-top: 20px; font-size: 24px; font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>Price Checker (MEXC)</h1>
+<input type="text" id="symbol" placeholder="Token symbol (e.g., COCA)" />
+<button onclick="fetchPrice()">Get Price</button>
+
+<div class="price" id="price"></div>
+
+<script>
+async function fetchPrice() {
+  const symbol = document.getElementById('symbol').value || 'COCA';
+  const priceDiv = document.getElementById('price');
+  priceDiv.textContent = 'Loading...';
+  try {
+    const res = await fetch(`/api/price?symbol=${symbol}`);
+    const data = await res.json();
+    if(data.price) {
+      priceDiv.textContent = `${data.symbol}: $${data.price}`;
+    } else {
+      priceDiv.textContent = 'Error: ' + (data.error || 'Unknown');
+    }
+  } catch(e) {
+    priceDiv.textContent = 'Error: ' + e.message;
+  }
+}
+
+// Автообновление каждые 10 секунд
+setInterval(fetchPrice, 10000);
+
+// Начальная загрузка
+fetchPrice();
+</script>
+</body>
+</html>
