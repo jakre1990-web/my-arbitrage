@@ -1,88 +1,110 @@
 from fastapi import FastAPI
-import httpx
-import json
-import os
+from fastapi.responses import HTMLResponse
+import requests
 
 app = FastAPI()
 
-CHAIN_ID = 137
-USDT = "0xc2132d05d31c914a87c6611c10748aeb04b58e8f"
-ODOS_FEE = 0.002
-MEXC_FEE = 0.001
+PRICES_API = "https://my-arbitrage.onrender.com/prices"  # или локально /prices
 
-# Загружаем токены
-with open("tokens.json", "r") as f:
-    TOKENS = json.load(f)
+@app.get("/")
+async def root():
+    return HTMLResponse("""
+    <!DOCTYPE html>
+    <html lang="ru">
+    <head>
+      <meta charset="UTF-8">
+      <title>Arbitrage Monitor</title>
+      <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        table { border-collapse: collapse; margin: 20px 0; width: 100%; }
+        th, td { border: 1px solid #ccc; padding: 8px; text-align: center; }
+        th { background: #eee; }
+        .profit-pos { color: green; font-weight: bold; }
+        .profit-neg { color: red; font-weight: bold; }
+        .tables-row { display: flex; gap: 20px; flex-wrap: wrap; }
+        .tables-row table { width: 48%; }
+      </style>
+    </head>
+    <body>
+      <h1>📊 Arbitrage Monitor</h1>
+      <div class="tables-row">
+        <table id="odos-mexc">
+          <thead>
+            <tr>
+              <th>Токен</th>
+              <th>ODOS цена</th>
+              <th>MEXC цена</th>
+              <th>Спред (%)</th>
+              <th>Прибыль (USDT)</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
 
-@app.get("/prices")
-async def get_prices():
-    odos_prices = {}
-    mexc_prices = {}
-    spread = {}
-    profit = {}
+        <table id="mexc-odos">
+          <thead>
+            <tr>
+              <th>Токен</th>
+              <th>MEXC цена</th>
+              <th>ODOS цена</th>
+              <th>Спред (%)</th>
+              <th>Прибыль (USDT)</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
 
-    async with httpx.AsyncClient() as client:
-        for token in TOKENS:
-            tokens_bought = None
+      <script>
+        const TOKENS = [
+          "NAKA","SAND","NWS","ZRO","UPO","QUICK","APEPE","SUT","GNS","GEOD",
+          "COCA","MLC","IXT","KASTA","SOIL","SWCH","UBU","FURI","PolyDoge",
+          "CARR","DEOD","DTEC","EDX","MINX","WEFI","WSDM"
+        ];
 
-            # ODOS (покупка на 50 USDT)
-            try:
-                effective_usdt = 50 * (1 - ODOS_FEE)
-                res = await client.post(
-                    "https://api.odos.xyz/sor/quote/v2",
-                    json={
-                        "chainId": CHAIN_ID,
-                        "inputTokens": [{"tokenAddress": USDT, "amount": str(int(effective_usdt * 1e6))}],
-                        "outputTokens": [{"tokenAddress": token["address"]}],
-                        "slippageLimitPercent": 1
-                    }
-                )
-                data = res.json()
-                out = data.get("outAmounts", [None])[0]
-                if out:
-                    tokens_bought = int(out) / 1e18
-                    odos_prices[token["symbol"]] = effective_usdt / tokens_bought
-                else:
-                    odos_prices[token["symbol"]] = None
-            except:
-                odos_prices[token["symbol"]] = None
+        function formatProfit(value) {
+          if (value == null) return "-";
+          const fixed = value.toFixed(4);
+          if (value > 0) return `<span class="profit-pos">+${fixed}</span>`;
+          if (value < 0) return `<span class="profit-neg">${fixed}</span>`;
+          return fixed;
+        }
 
-            # MEXC (продажа этих токенов)
-            try:
-                res = await client.get(f"https://api.mexc.com/api/v3/depth?symbol={token['symbol']}USDT&limit=50")
-                data = res.json()
-                asks = data.get("asks", [])
+        async function loadData() {
+          const res = await fetch("/prices");
+          const data = await res.json();
 
-                if asks and tokens_bought:
-                    remaining_tokens = tokens_bought
-                    total_usdt = 0
-                    for price_str, qty_str in asks:
-                        price = float(price_str)
-                        qty = float(qty_str)
-                        if remaining_tokens >= qty:
-                            total_usdt += price * qty
-                            remaining_tokens -= qty
-                        else:
-                            total_usdt += price * remaining_tokens
-                            break
+          const tbodyOdos = document.querySelector("#odos-mexc tbody");
+          const tbodyMexc = document.querySelector("#mexc-odos tbody");
+          tbodyOdos.innerHTML = "";
+          tbodyMexc.innerHTML = "";
 
-                    usdt_after_fee = total_usdt * (1 - MEXC_FEE)
-                    mexc_prices[token["symbol"]] = total_usdt / tokens_bought
-                    profit[token["symbol"]] = usdt_after_fee - 50
-                else:
-                    mexc_prices[token["symbol"]] = None
-                    profit[token["symbol"]] = None
-            except:
-                mexc_prices[token["symbol"]] = None
-                profit[token["symbol"]] = None
+          for (const token of TOKENS) {
+            const rowOdos = document.createElement("tr");
+            rowOdos.innerHTML = `
+              <td>${token}</td>
+              <td>${data.odos?.[token] ? data.odos[token].toFixed(6) : "-"}</td>
+              <td>${data.mexc?.[token] ? data.mexc[token].toFixed(6) : "-"}</td>
+              <td>${data.spread?.[token] ? data.spread[token].toFixed(2) : "-"}%</td>
+              <td>${formatProfit(data.profit?.[token])}</td>
+            `;
+            tbodyOdos.appendChild(rowOdos);
 
-            # Спред
-            if odos_prices[token["symbol"]] and mexc_prices[token["symbol"]]:
-                spread[token["symbol"]] = (
-                    (odos_prices[token["symbol"]] - mexc_prices[token["symbol"]])
-                    / mexc_prices[token["symbol"]] * 100
-                )
-            else:
-                spread[token["symbol"]] = None
+            const rowMexc = document.createElement("tr");
+            rowMexc.innerHTML = `
+              <td>${token}</td>
+              <td>${data.mexc?.[token] ? data.mexc[token].toFixed(6) : "-"}</td>
+              <td>${data.odos?.[token] ? data.odos[token].toFixed(6) : "-"}</td>
+              <td>${data.spread?.[token] ? data.spread[token].toFixed(2) : "-"}%</td>
+              <td>${formatProfit(data.profit?.[token])}</td>
+            `;
+            tbodyMexc.appendChild(rowMexc);
+          }
+        }
 
-    return {"odos": odos_prices, "mexc": mexc_prices, "spread": spread, "profit": profit}
+        loadData();
+        setInterval(loadData, 10000); // обновление каждые 10 секунд
+      </script>
+    </body>
+    </html>
+    """)
